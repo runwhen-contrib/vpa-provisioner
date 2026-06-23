@@ -1,7 +1,11 @@
 name: Build and Push
 
-# Pushes main and main-<sha> tags on every push to main.
-# PR preview images are built by pr-image.yaml.
+# Continuous build for the vpa-provisioner container image.
+#
+# Pushes `main` and `main-<sha>` on every push to main. PR preview images
+# are built by pr-image.yaml. Date-tagged releases (`YYYY-MM-DD.N`) are cut
+# from the manually-triggered generate_release.yaml workflow so release
+# cadence is not tied to commit cadence.
 
 on:
   push:

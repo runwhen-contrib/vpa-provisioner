@@ -9,6 +9,7 @@
 for every Deployment and StatefulSet in the cluster.
 
 [![Build and Push](https://github.com/runwhen-contrib/vpa-provisioner/actions/workflows/build-and-push.yaml/badge.svg)](https://github.com/runwhen-contrib/vpa-provisioner/actions/workflows/build-and-push.yaml)
+[![Generate Release](https://github.com/runwhen-contrib/vpa-provisioner/actions/workflows/generate_release.yaml/badge.svg)](https://github.com/runwhen-contrib/vpa-provisioner/actions/workflows/generate_release.yaml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 [GitHub](https://github.com/runwhen-contrib/vpa-provisioner) · [GHCR](https://github.com/orgs/runwhen-contrib/packages/container/package/vpa-provisioner)
@@ -98,6 +99,8 @@ Images are published to **`ghcr.io/runwhen-contrib/vpa-provisioner`**.
 
 | Tag | When |
 |-----|------|
+| `YYYY-MM-DD.N` | Date-based release (e.g. `2026-06-23.1`); cut manually via **Generate Release** |
+| `latest` | Updated on each date-based release (convenience only; pin a date tag in production) |
 | `main` | Latest main build |
 | `main-<sha>` | Immutable commit tag on main |
 | `pr-<n>` | Latest build for pull request *n* (moving pointer) |
@@ -106,7 +109,24 @@ Images are published to **`ghcr.io/runwhen-contrib/vpa-provisioner`**.
 Workflows:
 
 - **Build and Push** (`.github/workflows/build-and-push.yaml`) — runs on push to `main`
+- **Generate Release** (`.github/workflows/generate_release.yaml`) — manual; cuts `YYYY-MM-DD.N`, pushes image + GitHub Release
 - **PR Image** (`.github/workflows/pr-image.yaml`) — runs on pull requests; pushes preview tags and comments on the PR with pull/install commands
+
+### Cutting a release
+
+Releases use date-based tags (`YYYY-MM-DD.N`), incrementing `.N` for multiple cuts on the same day:
+
+```bash
+gh workflow run generate_release.yaml
+```
+
+Or from GitHub: **Actions → Generate Release → Run workflow**.
+
+Optional pre-release suffix (produces e.g. `2026-06-23.1-rc1`):
+
+```bash
+gh workflow run generate_release.yaml -f tag_suffix=rc1
+```
 
 ## Quick start
 
