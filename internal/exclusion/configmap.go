@@ -1,0 +1,130 @@
+package exclusion
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync/atomic"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
+)
+
+// ConfigMapWatcher loads and hot-reloads exclusion policy from a ConfigMap.
+type ConfigMapWatcher struct {
+	clientset  kubernetes.Interface
+	namespace  string
+	name       string
+	basePolicy Policy
+	policy     atomic.Value
+	logger     *slog.Logger
+}
+
+func NewConfigMapWatcher(clientset kubernetes.Interface, namespace, name string, basePolicy Policy) *ConfigMapWatcher {
+	w := &ConfigMapWatcher{
+		clientset:  clientset,
+		namespace:  namespace,
+		name:       name,
+		basePolicy: basePolicy,
+		logger:     slog.Default().With("component", "exclusion-config"),
+	}
+	w.storePolicy(basePolicy)
+	return w
+}
+
+func (w *ConfigMapWatcher) Current() Policy {
+	if value := w.policy.Load(); value != nil {
+		return value.(Policy)
+	}
+	return w.basePolicy
+}
+
+func (w *ConfigMapWatcher) Run(ctx context.Context) error {
+	if w.namespace == "" || w.name == "" {
+		w.logger.Info("configmap watcher disabled")
+		return nil
+	}
+
+	cm, err := w.clientset.CoreV1().ConfigMaps(w.namespace).Get(ctx, w.name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			w.logger.Warn("exclusion configmap not found; using base policy only",
+				"namespace", w.namespace,
+				"name", w.name,
+			)
+		} else {
+			return fmt.Errorf("load exclusion configmap: %w", err)
+		}
+	} else if err := w.applyConfigMap(cm); err != nil {
+		return err
+	}
+
+	factory := informers.NewSharedInformerFactoryWithOptions(
+		w.clientset,
+		0,
+		informers.WithNamespace(w.namespace),
+		informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
+			opts.FieldSelector = fmt.Sprintf("metadata.name=%s", w.name)
+		}),
+	)
+
+	informer := factory.Core().V1().ConfigMaps().Informer()
+	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			w.handleConfigMap(obj)
+		},
+		UpdateFunc: func(_, newObj interface{}) {
+			w.handleConfigMap(newObj)
+		},
+		DeleteFunc: func(_ interface{}) {
+			w.logger.Warn("exclusion configmap deleted; reverting to base policy",
+				"namespace", w.namespace,
+				"name", w.name,
+			)
+			w.storePolicy(w.basePolicy)
+		},
+	}); err != nil {
+		return fmt.Errorf("register configmap handler: %w", err)
+	}
+
+	factory.Start(ctx.Done())
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		return fmt.Errorf("sync exclusion configmap informer")
+	}
+
+	w.logger.Info("watching exclusion configmap", "namespace", w.namespace, "name", w.name)
+	<-ctx.Done()
+	return nil
+}
+
+func (w *ConfigMapWatcher) handleConfigMap(obj interface{}) {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return
+	}
+	if err := w.applyConfigMap(cm); err != nil {
+		w.logger.Error("failed to apply exclusion configmap", "error", err)
+	}
+}
+
+func (w *ConfigMapWatcher) applyConfigMap(cm *corev1.ConfigMap) error {
+	filePolicy, err := ParseConfigMapData(cm.Data)
+	if err != nil {
+		return err
+	}
+	merged := Merge(w.basePolicy, filePolicy)
+	w.storePolicy(merged)
+	w.logger.Info("loaded exclusion policy",
+		"namespaces", len(merged.Namespaces),
+		"workloads", len(merged.Workloads),
+	)
+	return nil
+}
+
+func (w *ConfigMapWatcher) storePolicy(policy Policy) {
+	w.policy.Store(policy)
+}

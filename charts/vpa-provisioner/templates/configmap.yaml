@@ -1,0 +1,21 @@
+{{- if .Values.exclusionConfig.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.exclusionConfig.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vpa-provisioner.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    excludeNamespaces:
+    {{- range .Values.exclusionConfig.excludeNamespaces }}
+      - {{ . | quote }}
+    {{- end }}
+    excludeWorkloads:
+    {{- range .Values.exclusionConfig.excludeWorkloads }}
+      - namespace: {{ .namespace | quote }}
+        kind: {{ .kind | quote }}
+        name: {{ .name | quote }}
+    {{- end }}
+{{- end }}
