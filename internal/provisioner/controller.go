@@ -55,8 +55,12 @@ func NewController(clientset kubernetes.Interface, dynamicClient dynamic.Interfa
 }
 
 func (c *Controller) Run(ctx context.Context, clientset kubernetes.Interface) error {
+	if err := c.policy.LoadInitial(ctx); err != nil {
+		return fmt.Errorf("load exclusion policy: %w", err)
+	}
+
 	go func() {
-		if err := c.policy.Run(ctx); err != nil && ctx.Err() == nil {
+		if err := c.policy.Watch(ctx); err != nil && ctx.Err() == nil {
 			c.logger.Error("exclusion configmap watcher stopped", "error", err)
 		}
 	}()
@@ -125,6 +129,6 @@ func (c *Controller) handleObject(ctx context.Context, obj interface{}) {
 		"kind", ref.Kind,
 		"namespace", ref.Namespace,
 		"name", ref.Name,
-		"vpa", vpaNameFor(ref.Name),
+		"vpa", vpaNameFor(ref.Kind, ref.Name),
 	)
 }

@@ -3,14 +3,18 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/runwhen-contrib/vpa-provisioner/internal/exclusion"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 )
+
+const maxKubernetesNameLength = 63
 
 var vpaGVR = schema.GroupVersionResource{
 	Group:    "autoscaling.k8s.io",
@@ -38,8 +42,16 @@ func (w workloadRef) exclusionRef() exclusion.WorkloadRef {
 	}
 }
 
-func vpaNameFor(workloadName string) string {
-	return fmt.Sprintf("%s-vpa", workloadName)
+func vpaNameFor(kind, workloadName string) string {
+	suffix := "-" + strings.ToLower(kind) + "-vpa"
+	maxBaseLen := maxKubernetesNameLength - len(suffix)
+	if maxBaseLen < 1 {
+		maxBaseLen = 1
+	}
+	if len(workloadName) > maxBaseLen {
+		workloadName = strings.Trim(workloadName[:maxBaseLen], "-")
+	}
+	return workloadName + suffix
 }
 
 func buildVPA(ref workloadRef) *unstructured.Unstructured {
@@ -49,7 +61,7 @@ func buildVPA(ref workloadRef) *unstructured.Unstructured {
 		Version: vpaGVR.Version,
 		Kind:    "VerticalPodAutoscaler",
 	})
-	vpa.SetName(vpaNameFor(ref.Name))
+	vpa.SetName(vpaNameFor(ref.Kind, ref.Name))
 	vpa.SetNamespace(ref.Namespace)
 	vpa.SetOwnerReferences([]metav1.OwnerReference{
 		{
@@ -80,15 +92,21 @@ func ensureVPAExists(ctx context.Context, client dynamic.Interface, ref workload
 		return nil
 	}
 
-	name := vpaNameFor(ref.Name)
+	name := vpaNameFor(ref.Kind, ref.Name)
 	nsClient := client.Resource(vpaGVR).Namespace(ref.Namespace)
 
 	_, err := nsClient.Get(ctx, name, metav1.GetOptions{})
 	if err == nil {
 		return nil
 	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get VPA %s: %w", name, err)
+	}
 
 	vpa := buildVPA(ref)
 	_, err = nsClient.Create(ctx, vpa, metav1.CreateOptions{})
-	return err
+	if err == nil || apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return fmt.Errorf("create VPA %s: %w", name, err)
 }

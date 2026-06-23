@@ -1,12 +1,17 @@
 package provisioner
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/runwhen-contrib/vpa-provisioner/internal/exclusion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic/fake"
 )
 
 func TestBuildVPA(t *testing.T) {
@@ -19,8 +24,8 @@ func TestBuildVPA(t *testing.T) {
 	}
 
 	vpa := buildVPA(ref)
-	if vpa.GetName() != "nginx-vpa" {
-		t.Fatalf("name = %q, want nginx-vpa", vpa.GetName())
+	if vpa.GetName() != "nginx-deployment-vpa" {
+		t.Fatalf("name = %q, want nginx-deployment-vpa", vpa.GetName())
 	}
 	if vpa.GetNamespace() != "default" {
 		t.Fatalf("namespace = %q, want default", vpa.GetNamespace())
@@ -48,9 +53,82 @@ func TestBuildVPA(t *testing.T) {
 	}
 }
 
-func TestVPANameFor(t *testing.T) {
-	if got := vpaNameFor("api"); got != "api-vpa" {
-		t.Fatalf("vpaNameFor() = %q, want api-vpa", got)
+func TestVPANameForIncludesKind(t *testing.T) {
+	deployName := vpaNameFor("Deployment", "api")
+	statefulName := vpaNameFor("StatefulSet", "api")
+	if deployName == statefulName {
+		t.Fatalf("expected distinct VPA names, both got %q", deployName)
+	}
+	if deployName != "api-deployment-vpa" {
+		t.Fatalf("deploy VPA name = %q, want api-deployment-vpa", deployName)
+	}
+	if statefulName != "api-statefulset-vpa" {
+		t.Fatalf("statefulset VPA name = %q, want api-statefulset-vpa", statefulName)
+	}
+}
+
+func TestVPANameForTruncatesLongNames(t *testing.T) {
+	longName := strings.Repeat("a", 80)
+	got := vpaNameFor("StatefulSet", longName)
+	if len(got) > maxKubernetesNameLength {
+		t.Fatalf("name length = %d, want <= %d (%q)", len(got), maxKubernetesNameLength, got)
+	}
+	if !strings.HasSuffix(got, "-statefulset-vpa") {
+		t.Fatalf("expected statefulset suffix, got %q", got)
+	}
+}
+
+func TestEnsureVPAExistsCreatesWhenMissing(t *testing.T) {
+	scheme := runtime.NewScheme()
+	listKinds := map[schema.GroupVersionResource]string{
+		vpaGVR: "VerticalPodAutoscalerList",
+	}
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	ref := workloadRef{
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Namespace:  "default",
+		Name:       "web",
+		UID:        "uid-1",
+	}
+
+	if err := ensureVPAExists(context.Background(), client, ref, exclusion.Empty()); err != nil {
+		t.Fatalf("ensureVPAExists() error = %v", err)
+	}
+
+	got, err := client.Resource(vpaGVR).Namespace("default").Get(
+		context.Background(),
+		"web-deployment-vpa",
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	kind, _, _ := unstructured.NestedString(got.Object, "spec", "targetRef", "kind")
+	if kind != "Deployment" {
+		t.Fatalf("targetRef.kind = %q, want Deployment", kind)
+	}
+}
+
+func TestEnsureVPAExistsIdempotent(t *testing.T) {
+	scheme := runtime.NewScheme()
+	listKinds := map[schema.GroupVersionResource]string{
+		vpaGVR: "VerticalPodAutoscalerList",
+	}
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	ref := workloadRef{
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Namespace:  "default",
+		Name:       "web",
+		UID:        "uid-1",
+	}
+	policy := exclusion.Empty()
+
+	for range 2 {
+		if err := ensureVPAExists(context.Background(), client, ref, policy); err != nil {
+			t.Fatalf("ensureVPAExists() error = %v", err)
+		}
 	}
 }
 

@@ -43,7 +43,8 @@ func (w *ConfigMapWatcher) Current() Policy {
 	return w.basePolicy
 }
 
-func (w *ConfigMapWatcher) Run(ctx context.Context) error {
+// LoadInitial synchronously loads the exclusion ConfigMap before workload reconciliation.
+func (w *ConfigMapWatcher) LoadInitial(ctx context.Context) error {
 	if w.namespace == "" || w.name == "" {
 		w.logger.Info("configmap watcher disabled")
 		return nil
@@ -56,11 +57,19 @@ func (w *ConfigMapWatcher) Run(ctx context.Context) error {
 				"namespace", w.namespace,
 				"name", w.name,
 			)
-		} else {
-			return fmt.Errorf("load exclusion configmap: %w", err)
+			return nil
 		}
-	} else if err := w.applyConfigMap(cm); err != nil {
-		return err
+		return fmt.Errorf("load exclusion configmap: %w", err)
+	}
+
+	w.applyConfigMap(cm)
+	return nil
+}
+
+// Watch hot-reloads exclusion policy when the ConfigMap changes.
+func (w *ConfigMapWatcher) Watch(ctx context.Context) error {
+	if w.namespace == "" || w.name == "" {
+		return nil
 	}
 
 	factory := informers.NewSharedInformerFactoryWithOptions(
@@ -106,15 +115,18 @@ func (w *ConfigMapWatcher) handleConfigMap(obj interface{}) {
 	if !ok {
 		return
 	}
-	if err := w.applyConfigMap(cm); err != nil {
-		w.logger.Error("failed to apply exclusion configmap", "error", err)
-	}
+	w.applyConfigMap(cm)
 }
 
-func (w *ConfigMapWatcher) applyConfigMap(cm *corev1.ConfigMap) error {
+func (w *ConfigMapWatcher) applyConfigMap(cm *corev1.ConfigMap) {
 	filePolicy, err := ParseConfigMapData(cm.Data)
 	if err != nil {
-		return err
+		w.logger.Error("invalid exclusion configmap; keeping current policy",
+			"namespace", w.namespace,
+			"name", w.name,
+			"error", err,
+		)
+		return
 	}
 	merged := Merge(w.basePolicy, filePolicy)
 	w.storePolicy(merged)
@@ -122,7 +134,6 @@ func (w *ConfigMapWatcher) applyConfigMap(cm *corev1.ConfigMap) error {
 		"namespaces", len(merged.Namespaces),
 		"workloads", len(merged.Workloads),
 	)
-	return nil
 }
 
 func (w *ConfigMapWatcher) storePolicy(policy Policy) {

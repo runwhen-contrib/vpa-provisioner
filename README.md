@@ -190,13 +190,13 @@ CLI flags:
 ## Generated VPA shape
 
 For a Deployment named `nginx` in namespace `default`, the controller creates
-`default/nginx-vpa`:
+`default/nginx-deployment-vpa`:
 
 ```yaml
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
-  name: nginx-vpa
+  name: nginx-deployment-vpa
   namespace: default
   ownerReferences:
     - apiVersion: apps/v1
