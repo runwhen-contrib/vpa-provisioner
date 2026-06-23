@@ -85,6 +85,9 @@ func (c *Controller) Run(ctx context.Context, clientset kubernetes.Interface) er
 		UpdateFunc: func(_, newObj interface{}) {
 			c.handleObject(ctx, newObj)
 		},
+		DeleteFunc: func(obj interface{}) {
+			c.handleDelete(ctx, obj)
+		},
 	}
 
 	if _, err := deploymentInformer.AddEventHandler(handler); err != nil {
@@ -124,17 +127,8 @@ func (c *Controller) handleObject(ctx context.Context, obj interface{}) {
 	}
 
 	policy := c.policy.Current()
-	if policy.ShouldSkip(ref.exclusionRef()) {
-		c.logger.Debug("workload skipped",
-			"kind", ref.Kind,
-			"namespace", ref.Namespace,
-			"name", ref.Name,
-		)
-		return
-	}
-
-	if err := ensureVPAExists(ctx, c.dynamicClient, ref, policy); err != nil {
-		c.logger.Error("failed to ensure VPA",
+	if err := reconcileVPA(ctx, c.dynamicClient, ref, policy); err != nil {
+		c.logger.Error("failed to reconcile VPA",
 			"kind", ref.Kind,
 			"namespace", ref.Namespace,
 			"name", ref.Name,
@@ -143,7 +137,44 @@ func (c *Controller) handleObject(ctx context.Context, obj interface{}) {
 		return
 	}
 
+	if policy.ShouldSkip(ref.exclusionRef()) {
+		c.logger.Debug("workload skipped; managed VPA removed if present",
+			"kind", ref.Kind,
+			"namespace", ref.Namespace,
+			"name", ref.Name,
+		)
+		return
+	}
+
 	c.logger.Debug("VPA ensured",
+		"kind", ref.Kind,
+		"namespace", ref.Namespace,
+		"name", ref.Name,
+		"vpa", vpaNameFor(ref.Kind, ref.Name),
+	)
+}
+
+func (c *Controller) handleDelete(ctx context.Context, obj interface{}) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+
+	ref, ok := workloadRefFromObject(obj)
+	if !ok {
+		return
+	}
+
+	if err := deleteManagedVPA(ctx, c.dynamicClient, ref); err != nil {
+		c.logger.Error("failed to delete managed VPA for removed workload",
+			"kind", ref.Kind,
+			"namespace", ref.Namespace,
+			"name", ref.Name,
+			"error", err,
+		)
+		return
+	}
+
+	c.logger.Debug("managed VPA removed for deleted workload",
 		"kind", ref.Kind,
 		"namespace", ref.Namespace,
 		"name", ref.Name,

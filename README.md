@@ -73,7 +73,8 @@ At startup the controller checks:
 |----------|-----------|
 | Background controller (not webhook) | Failure domain isolation — if the controller is down, workloads are unaffected |
 | `updateMode: "Off"` | Recommendations only; no live resource mutation |
-| `ownerReferences` on VPAs | Native garbage collection when parent workload is deleted |
+| `ownerReferences` on VPAs | Garbage collection when parent workload is deleted |
+| Managed label + reconcile GC | Deletes provisioner-owned VPAs when workloads are excluded or removed; never touches foreign VPAs |
 | Unstructured dynamic client | No VPA API dependency in `go.mod` |
 | Opt-out label | `vpa-provisioner/skip: "true"` skips provisioning |
 | Namespace guardrails | `kube-system` excluded by default (configurable) |

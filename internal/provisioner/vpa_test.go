@@ -51,6 +51,11 @@ func TestBuildVPA(t *testing.T) {
 	if owners[0].Controller == nil || !*owners[0].Controller {
 		t.Fatal("expected controller owner reference")
 	}
+
+	labels := vpa.GetLabels()
+	if labels[ManagedByLabelKey] != ManagedByLabelValue {
+		t.Fatalf("managed label = %q, want %q", labels[ManagedByLabelKey], ManagedByLabelValue)
+	}
 }
 
 func TestVPANameForIncludesKind(t *testing.T) {
@@ -92,7 +97,7 @@ func TestEnsureVPAExistsCreatesWhenMissing(t *testing.T) {
 		UID:        "uid-1",
 	}
 
-	if err := ensureVPAExists(context.Background(), client, ref, exclusion.Empty()); err != nil {
+	if err := ensureVPAExists(context.Background(), client, ref); err != nil {
 		t.Fatalf("ensureVPAExists() error = %v", err)
 	}
 
@@ -123,10 +128,8 @@ func TestEnsureVPAExistsIdempotent(t *testing.T) {
 		Name:       "web",
 		UID:        "uid-1",
 	}
-	policy := exclusion.Empty()
-
 	for range 2 {
-		if err := ensureVPAExists(context.Background(), client, ref, policy); err != nil {
+		if err := ensureVPAExists(context.Background(), client, ref); err != nil {
 			t.Fatalf("ensureVPAExists() error = %v", err)
 		}
 	}
@@ -159,5 +162,79 @@ func TestEnsureVPASkipsOptOut(t *testing.T) {
 	policy := exclusion.Empty()
 	if !policy.ShouldSkip(ref.exclusionRef()) {
 		t.Fatal("expected workload to be skipped")
+	}
+}
+
+func TestReconcileVPADeletesWhenExcluded(t *testing.T) {
+	scheme := runtime.NewScheme()
+	listKinds := map[schema.GroupVersionResource]string{
+		vpaGVR: "VerticalPodAutoscalerList",
+	}
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	ref := workloadRef{
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Namespace:  "default",
+		Name:       "web",
+		UID:        "uid-1",
+	}
+
+	if err := ensureVPAExists(context.Background(), client, ref); err != nil {
+		t.Fatalf("ensureVPAExists() error = %v", err)
+	}
+
+	skipPolicy := exclusion.Empty()
+	skipPolicy.Namespaces = map[string]struct{}{"default": {}}
+	if err := reconcileVPA(context.Background(), client, ref, skipPolicy); err != nil {
+		t.Fatalf("reconcileVPA() error = %v", err)
+	}
+
+	_, err := client.Resource(vpaGVR).Namespace("default").Get(
+		context.Background(),
+		"web-deployment-vpa",
+		metav1.GetOptions{},
+	)
+	if err == nil {
+		t.Fatal("expected managed VPA to be deleted when workload excluded")
+	}
+}
+
+func TestDeleteManagedVPASkipsForeignVPA(t *testing.T) {
+	scheme := runtime.NewScheme()
+	listKinds := map[schema.GroupVersionResource]string{
+		vpaGVR: "VerticalPodAutoscalerList",
+	}
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	ref := workloadRef{
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Namespace:  "default",
+		Name:       "web",
+		UID:        "uid-1",
+	}
+
+	foreign := buildVPA(ref)
+	foreign.SetLabels(nil)
+	_ = unstructured.SetNestedField(foreign.Object, map[string]interface{}{
+		"updateMode": "Auto",
+	}, "spec", "updatePolicy")
+	if _, err := client.Resource(vpaGVR).Namespace("default").Create(
+		context.Background(),
+		foreign,
+		metav1.CreateOptions{},
+	); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := deleteManagedVPA(context.Background(), client, ref); err != nil {
+		t.Fatalf("deleteManagedVPA() error = %v", err)
+	}
+
+	if _, err := client.Resource(vpaGVR).Namespace("default").Get(
+		context.Background(),
+		"web-deployment-vpa",
+		metav1.GetOptions{},
+	); err != nil {
+		t.Fatalf("foreign VPA should remain: %v", err)
 	}
 }
