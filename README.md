@@ -1,8 +1,21 @@
+<div align="center">
+
+![vpa-provisioner banner](assets/banner.svg)
+
 # vpa-provisioner
 
-Lightweight Kubernetes controller that automatically provisions a
+**vpa-provisioner** is a lightweight Kubernetes controller that automatically provisions a
 [VerticalPodAutoscaler (VPA)](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler)
 for every Deployment and StatefulSet in the cluster.
+
+[![Build and Push](https://github.com/runwhen-contrib/vpa-provisioner/actions/workflows/build-and-push.yaml/badge.svg)](https://github.com/runwhen-contrib/vpa-provisioner/actions/workflows/build-and-push.yaml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+[GitHub](https://github.com/runwhen-contrib/vpa-provisioner) · [GHCR](https://github.com/orgs/runwhen-contrib/packages/container/package/vpa-provisioner)
+
+</div>
+
+---
 
 VPAs are created with `updatePolicy.updateMode: "Off"` so the VPA Recommender
 can collect rightsizing recommendations **without** modifying live pod resources or
