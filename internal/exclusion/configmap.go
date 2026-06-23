@@ -21,6 +21,7 @@ type ConfigMapWatcher struct {
 	name       string
 	basePolicy Policy
 	policy     atomic.Value
+	onChange   func()
 	logger     *slog.Logger
 }
 
@@ -32,7 +33,7 @@ func NewConfigMapWatcher(clientset kubernetes.Interface, namespace, name string,
 		basePolicy: basePolicy,
 		logger:     slog.Default().With("component", "exclusion-config"),
 	}
-	w.storePolicy(basePolicy)
+	w.storePolicy(basePolicy, false)
 	return w
 }
 
@@ -41,6 +42,11 @@ func (w *ConfigMapWatcher) Current() Policy {
 		return value.(Policy)
 	}
 	return w.basePolicy
+}
+
+// OnPolicyChange registers a callback invoked when the merged exclusion policy changes.
+func (w *ConfigMapWatcher) OnPolicyChange(fn func()) {
+	w.onChange = fn
 }
 
 // LoadInitial synchronously loads the exclusion ConfigMap before workload reconciliation.
@@ -62,7 +68,7 @@ func (w *ConfigMapWatcher) LoadInitial(ctx context.Context) error {
 		return fmt.Errorf("load exclusion configmap: %w", err)
 	}
 
-	w.applyConfigMap(cm)
+	w.applyConfigMap(cm, false)
 	return nil
 }
 
@@ -94,7 +100,7 @@ func (w *ConfigMapWatcher) Watch(ctx context.Context) error {
 				"namespace", w.namespace,
 				"name", w.name,
 			)
-			w.storePolicy(w.basePolicy)
+			w.storePolicy(w.basePolicy, true)
 		},
 	}); err != nil {
 		return fmt.Errorf("register configmap handler: %w", err)
@@ -115,10 +121,10 @@ func (w *ConfigMapWatcher) handleConfigMap(obj interface{}) {
 	if !ok {
 		return
 	}
-	w.applyConfigMap(cm)
+	w.applyConfigMap(cm, true)
 }
 
-func (w *ConfigMapWatcher) applyConfigMap(cm *corev1.ConfigMap) {
+func (w *ConfigMapWatcher) applyConfigMap(cm *corev1.ConfigMap, notify bool) {
 	filePolicy, err := ParseConfigMapData(cm.Data)
 	if err != nil {
 		w.logger.Error("invalid exclusion configmap; keeping current policy",
@@ -129,13 +135,20 @@ func (w *ConfigMapWatcher) applyConfigMap(cm *corev1.ConfigMap) {
 		return
 	}
 	merged := Merge(w.basePolicy, filePolicy)
-	w.storePolicy(merged)
+	w.storePolicy(merged, notify)
 	w.logger.Info("loaded exclusion policy",
 		"namespaces", len(merged.Namespaces),
 		"workloads", len(merged.Workloads),
 	)
 }
 
-func (w *ConfigMapWatcher) storePolicy(policy Policy) {
+func (w *ConfigMapWatcher) storePolicy(policy Policy, notify bool) {
+	prev := w.Current()
+	if prev.Equal(policy) {
+		return
+	}
 	w.policy.Store(policy)
+	if notify && w.onChange != nil {
+		w.onChange()
+	}
 }

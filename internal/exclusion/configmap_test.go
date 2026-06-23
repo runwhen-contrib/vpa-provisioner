@@ -78,15 +78,47 @@ excludeNamespaces:
   - monitoring
 `,
 		},
-	})
+	}, false)
 	watcher.applyConfigMap(&corev1.ConfigMap{
 		Data: map[string]string{
 			"config.yaml": "excludeNamespaces: [",
 		},
-	})
+	}, false)
 
 	current := watcher.Current()
 	if _, ok := current.Namespaces["monitoring"]; !ok {
 		t.Fatal("expected previous policy to remain after invalid update")
+	}
+}
+
+func TestConfigMapWatcherOnPolicyChange(t *testing.T) {
+	watcher := NewConfigMapWatcher(k8sfake.NewSimpleClientset(), "vpa-provisioner", "vpa-provisioner-config", ParseNamespaces("kube-system"))
+	calls := 0
+	watcher.OnPolicyChange(func() {
+		calls++
+	})
+
+	watcher.applyConfigMap(&corev1.ConfigMap{
+		Data: map[string]string{
+			"config.yaml": `
+excludeNamespaces:
+  - monitoring
+`,
+		},
+	}, true)
+	if calls != 1 {
+		t.Fatalf("OnPolicyChange calls = %d, want 1", calls)
+	}
+
+	watcher.applyConfigMap(&corev1.ConfigMap{
+		Data: map[string]string{
+			"config.yaml": `
+excludeNamespaces:
+  - monitoring
+`,
+		},
+	}, true)
+	if calls != 1 {
+		t.Fatalf("OnPolicyChange calls = %d, want 1 after unchanged policy", calls)
 	}
 }

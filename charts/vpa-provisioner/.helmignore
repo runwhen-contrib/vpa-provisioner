@@ -2,7 +2,6 @@
 .github/
 bin/
 *.md
-!README.md
 Dockerfile
 Makefile
 deploy/

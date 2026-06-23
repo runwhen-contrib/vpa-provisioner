@@ -25,10 +25,12 @@ type Config struct {
 
 // Controller watches Deployments and StatefulSets and ensures VPAs exist.
 type Controller struct {
-	dynamicClient dynamic.Interface
-	config        Config
-	policy        *exclusion.ConfigMapWatcher
-	logger        *slog.Logger
+	dynamicClient        dynamic.Interface
+	config               Config
+	policy               *exclusion.ConfigMapWatcher
+	deploymentInformer   cache.SharedIndexInformer
+	statefulSetInformer  cache.SharedIndexInformer
+	logger               *slog.Logger
 }
 
 func NewController(clientset kubernetes.Interface, dynamicClient dynamic.Interface, cfg Config) *Controller {
@@ -69,6 +71,12 @@ func (c *Controller) Run(ctx context.Context, clientset kubernetes.Interface) er
 
 	deploymentInformer := factory.Apps().V1().Deployments().Informer()
 	statefulSetInformer := factory.Apps().V1().StatefulSets().Informer()
+	c.deploymentInformer = deploymentInformer
+	c.statefulSetInformer = statefulSetInformer
+
+	c.policy.OnPolicyChange(func() {
+		c.reconcileAll(ctx)
+	})
 
 	handler := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -97,6 +105,16 @@ func (c *Controller) Run(ctx context.Context, clientset kubernetes.Interface) er
 	<-ctx.Done()
 	c.logger.Info("controller stopped")
 	return nil
+}
+
+func (c *Controller) reconcileAll(ctx context.Context) {
+	c.logger.Info("exclusion policy changed; reconciling cached workloads")
+	for _, obj := range c.deploymentInformer.GetStore().List() {
+		c.handleObject(ctx, obj)
+	}
+	for _, obj := range c.statefulSetInformer.GetStore().List() {
+		c.handleObject(ctx, obj)
+	}
 }
 
 func (c *Controller) handleObject(ctx context.Context, obj interface{}) {

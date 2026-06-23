@@ -136,6 +136,54 @@ func TestCheckerVerifyWithRecommender(t *testing.T) {
 	}
 }
 
+func TestCheckerVerifyWithPrefixedRecommender(t *testing.T) {
+	scheme := runtime.NewScheme()
+	listKinds := map[schema.GroupVersionResource]string{
+		vpaGVR: "VerticalPodAutoscalerList",
+	}
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	clientset := k8sfake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "vault-vpa-recommender",
+				Namespace: "vpa",
+			},
+		},
+	)
+	discoveryClient := newFakeDiscovery([]*metav1.APIResourceList{
+		{
+			GroupVersion: "autoscaling.k8s.io/v1",
+			APIResources: []metav1.APIResource{
+				{Kind: "VerticalPodAutoscaler", Name: "verticalpodautoscalers"},
+			},
+		},
+	})
+
+	checker := NewChecker(clientset, dynamicClient, discoveryClient, Config{RequireRecommender: true})
+	if err := checker.Verify(context.Background()); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+}
+
+func TestMatchesComponentName(t *testing.T) {
+	cases := []struct {
+		deployment string
+		component  string
+		want       bool
+	}{
+		{"vpa-recommender", recommenderDeployName, true},
+		{"vault-vpa-recommender", recommenderDeployName, true},
+		{"vpa-admission-controller", admissionDeployName, true},
+		{"vault-vpa-admission-controller", admissionDeployName, true},
+		{"nginx", recommenderDeployName, false},
+	}
+	for _, tc := range cases {
+		if got := MatchesComponentName(tc.deployment, tc.component); got != tc.want {
+			t.Fatalf("MatchesComponentName(%q, %q) = %v, want %v", tc.deployment, tc.component, got, tc.want)
+		}
+	}
+}
+
 func TestHasComponentDeployment(t *testing.T) {
 	deployments := []appsv1.Deployment{
 		{ObjectMeta: metav1.ObjectMeta{Name: "vpa-recommender"}},

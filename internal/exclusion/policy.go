@@ -146,6 +146,27 @@ func Merge(policies ...Policy) Policy {
 	return merged
 }
 
+// Equal reports whether two policies contain the same exclusions.
+func (p Policy) Equal(other Policy) bool {
+	if len(p.Namespaces) != len(other.Namespaces) {
+		return false
+	}
+	for ns := range p.Namespaces {
+		if _, ok := other.Namespaces[ns]; !ok {
+			return false
+		}
+	}
+	if len(p.Workloads) != len(other.Workloads) {
+		return false
+	}
+	for key := range p.Workloads {
+		if _, ok := other.Workloads[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // ShouldSkip reports whether a workload should not receive a VPA.
 func (p Policy) ShouldSkip(ref WorkloadRef) bool {
 	if ref.HasOptOut() {

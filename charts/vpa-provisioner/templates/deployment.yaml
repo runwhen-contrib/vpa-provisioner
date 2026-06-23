@@ -29,7 +29,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "main" }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: POD_NAMESPACE
@@ -38,8 +38,12 @@ spec:
                   fieldPath: metadata.namespace
           args:
             - -exclude-namespaces={{ .Values.excludeNamespaces }}
+            {{- if .Values.exclusionConfig.enabled }}
             - -config-map-name={{ .Values.exclusionConfig.name }}
             - -config-map-namespace={{ .Release.Namespace }}
+            {{- else }}
+            - -config-map-name=
+            {{- end }}
             {{- if .Values.requireRecommender }}
             - -require-recommender=true
             {{- end }}

@@ -147,16 +147,20 @@ func (c *Checker) checkVPAPermissions(ctx context.Context) error {
 }
 
 func (c *Checker) checkRecommender(ctx context.Context) bool {
-	if c.deploymentExists(ctx, recommenderDeployName) {
-		c.logger.Info("VPA Recommender detected", "deployment", recommenderDeployName)
+	if name, namespace, ok := c.findComponentDeployment(ctx, recommenderDeployName); ok {
+		c.logger.Info("VPA Recommender detected", "deployment", name, "namespace", namespace)
 		return true
 	}
 	return false
 }
 
 func (c *Checker) checkMutatingComponents(ctx context.Context) (admissionFound, updaterFound bool) {
-	admissionFound = c.deploymentExists(ctx, admissionDeployName)
-	updaterFound = c.deploymentExists(ctx, updaterDeployName)
+	if _, _, ok := c.findComponentDeployment(ctx, admissionDeployName); ok {
+		admissionFound = true
+	}
+	if _, _, ok := c.findComponentDeployment(ctx, updaterDeployName); ok {
+		updaterFound = true
+	}
 	return admissionFound, updaterFound
 }
 
@@ -178,7 +182,7 @@ func (c *Checker) checkVPAWebhooks(ctx context.Context) {
 	}
 }
 
-func (c *Checker) deploymentExists(ctx context.Context, name string) bool {
+func (c *Checker) findComponentDeployment(ctx context.Context, component string) (name, namespace string, found bool) {
 	namespaces := []string{
 		metav1.NamespaceSystem,
 		"vpa-system",
@@ -187,15 +191,35 @@ func (c *Checker) deploymentExists(ctx context.Context, name string) bool {
 		"kube-vpa",
 	}
 
-	for _, namespace := range namespaces {
-		deployment, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err == nil && deployment != nil {
-			c.logger.Debug("found VPA component deployment", "deployment", name, "namespace", namespace)
-			return true
+	for _, ns := range namespaces {
+		deployments, err := c.clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			c.logger.Debug("unable to list deployments", "namespace", ns, "error", err)
+			continue
+		}
+		for i := range deployments.Items {
+			deploymentName := deployments.Items[i].Name
+			if MatchesComponentName(deploymentName, component) {
+				c.logger.Debug("found VPA component deployment",
+					"deployment", deploymentName,
+					"namespace", ns,
+					"component", component,
+				)
+				return deploymentName, ns, true
+			}
 		}
 	}
 
-	return false
+	return "", "", false
+}
+
+// MatchesComponentName reports whether a deployment name matches a VPA component,
+// including Helm release-prefixed names such as vault-vpa-recommender.
+func MatchesComponentName(deploymentName, component string) bool {
+	if deploymentName == component {
+		return true
+	}
+	return strings.HasSuffix(deploymentName, "-"+component)
 }
 
 func isForbidden(err error) bool {
@@ -226,7 +250,7 @@ func DeploymentNames() (recommender, admission, updater string) {
 // HasComponentDeployment reports whether a deployment list contains a named VPA component.
 func HasComponentDeployment(deployments []appsv1.Deployment, name string) bool {
 	for i := range deployments {
-		if deployments[i].Name == name {
+		if MatchesComponentName(deployments[i].Name, name) {
 			return true
 		}
 	}
