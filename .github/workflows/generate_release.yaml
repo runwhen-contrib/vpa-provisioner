@@ -1,0 +1,171 @@
+name: Generate Release
+
+# Manual release pipeline for vpa-provisioner.
+#
+# Cuts a date-based release tag (YYYY-MM-DD.N), pushes the built image
+# to ghcr.io/runwhen-contrib/vpa-provisioner:<TAG> AND :latest, and
+# creates a GitHub Release with auto-generated notes. Matches the release
+# tag scheme used by cortex-tenant and other RunWhen first-party images.
+#
+# Trigger: workflow_dispatch only. Maintainers run this when ready to ship;
+# build-and-push.yaml stops at main / main-<sha> so accidental pushes never
+# produce release-shaped tags.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_suffix:
+        description: >-
+          Optional suffix appended to the date tag (e.g. "rc1" produces
+          2026-06-23.1-rc1 instead of 2026-06-23.1). Leave blank for a
+          normal release.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: runwhen-contrib/vpa-provisioner
+
+jobs:
+  tag-and-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.create_tag.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next date-based tag
+        id: create_tag
+        run: |
+          set -euo pipefail
+          DATE="$(date -u +%Y-%m-%d)"
+          SUFFIX=""
+          [ -n "${{ inputs.tag_suffix }}" ] && SUFFIX="-${{ inputs.tag_suffix }}"
+
+          LAST_N=$(git tag --list "${DATE}.*" "${DATE}.*-*" \
+            | sed -E "s|^${DATE}\.([0-9]+).*|\1|" \
+            | sort -n | tail -1)
+          if [ -z "${LAST_N}" ]; then
+            NEXT_N=1
+          else
+            NEXT_N=$((LAST_N + 1))
+          fi
+
+          TAG="${DATE}.${NEXT_N}${SUFFIX}"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Cutting release: ${TAG}"
+
+      - name: Configure git author
+        run: |
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          git config user.name  "${GITHUB_ACTOR}"
+
+      - name: Push git tag
+        env:
+          TAG: ${{ steps.create_tag.outputs.release_tag }}
+        run: |
+          git tag "${TAG}"
+          git push origin "${TAG}"
+
+  build-and-push-release:
+    needs: tag-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag-and-release.outputs.release_tag }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -timeout 120s ./...
+
+      - name: Helm template
+        uses: azure/setup-helm@v4
+
+      - name: Render chart
+        run: |
+          helm lint ./charts/vpa-provisioner
+          helm template test ./charts/vpa-provisioner --namespace vpa-provisioner
+
+      - name: Log in to ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.tag-and-release.outputs.release_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.tag-and-release.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            VERSION=${{ needs.tag-and-release.outputs.release_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  github-release:
+    needs: [tag-and-release, build-and-push-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag-and-release.outputs.release_tag }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          gh release create "${TAG}" \
+            --title "vpa-provisioner ${TAG}" \
+            --generate-notes \
+            --notes "
+          ## Image
+
+          \`\`\`
+          ${IMAGE}:${TAG}
+          \`\`\`
+
+          ### Pull
+
+          \`\`\`bash
+          docker pull ${IMAGE}:${TAG}
+          \`\`\`
+
+          ### Helm
+
+          \`\`\`bash
+          helm upgrade --install vpa-provisioner ./charts/vpa-provisioner \\
+            --namespace vpa-provisioner --create-namespace \\
+            --set image.tag=${TAG}
+          \`\`\`
+          "

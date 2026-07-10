@@ -1,0 +1,9 @@
+.git/
+.github/
+bin/
+*.md
+Dockerfile
+Makefile
+deploy/
+internal/
+cmd/

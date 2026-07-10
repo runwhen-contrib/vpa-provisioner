@@ -1,0 +1,68 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/runwhen-contrib/vpa-provisioner
+  tag: main
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Comma-separated namespaces the controller will never provision VPAs for.
+excludeNamespaces: kube-system,vpa-provisioner,kube-public
+
+# Exclusion policy ConfigMap watched by the controller for namespace/workload omissions.
+exclusionConfig:
+  enabled: true
+  name: vpa-provisioner-config
+  excludeNamespaces: []
+  excludeWorkloads: []
+  # excludeWorkloads:
+  #   - namespace: backend-services
+  #     kind: Deployment
+  #     name: papi
+
+# Fail startup if vpa-recommender is not detected in the cluster.
+requireRecommender: false
+
+# Skip cluster prerequisite validation (not recommended in production).
+skipPrerequisiteCheck: false
+
+extraArgs: []

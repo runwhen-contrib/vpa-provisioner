@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vpa-provisioner-config
+  namespace: vpa-provisioner
+  labels:
+    app.kubernetes.io/name: vpa-provisioner
+    app.kubernetes.io/component: controller
+data:
+  config.yaml: |
+    # Namespaces and workloads listed here are omitted from VPA provisioning.
+    # CLI -exclude-namespaces flags are merged with this list.
+    excludeNamespaces:
+      - monitoring
+    excludeWorkloads:
+      - namespace: backend-services
+        kind: Deployment
+        name: papi
